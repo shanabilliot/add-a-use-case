@@ -1,5 +1,6 @@
 package team.projectpulse.student;
 
+import jakarta.persistence.EntityManager;
 import tools.jackson.databind.json.JsonMapper;
 import team.projectpulse.AbstractIntegrationTest;
 import team.projectpulse.system.StatusCode;
@@ -26,6 +27,7 @@ import java.util.Map;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.result.MockMvcResultHandlers.print;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -44,6 +46,9 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
 
     @Autowired
     SectionRepository sectionRepository;
+
+    @Autowired
+    EntityManager entityManager;
 
     String adminToken;
 
@@ -152,6 +157,10 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
         Section section = this.sectionRepository.findById(2).orElseThrow();
         section.getInstructors().removeIf(instructor -> instructor.getEmail().equals("b.wei@abc.edu"));
         this.sectionRepository.saveAndFlush(section);
+        long activitiesBefore = this.entityManager.createQuery(
+                "select count(a) from Activity a where a.student.id = 4", Long.class).getSingleResult();
+        long evaluationsBefore = this.entityManager.createQuery(
+                "select count(e) from PeerEvaluation e where e.evaluatee.id = 4", Long.class).getSingleResult();
 
         for (int attempt = 0; attempt < 2; attempt++) {
             this.mockMvc.perform(patch(this.baseUrl + "/students/4/deactivation")
@@ -165,6 +174,15 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
                     .andExpect(jsonPath("$.data.enabled").value(false))
                     .andExpect(jsonPath("$.data.teamId").value(1));
         }
+
+        assertThat(activitiesBefore).isPositive();
+        assertThat(evaluationsBefore).isPositive();
+        assertThat(this.entityManager.createQuery(
+                "select count(a) from Activity a where a.student.id = 4", Long.class).getSingleResult())
+                .isEqualTo(activitiesBefore);
+        assertThat(this.entityManager.createQuery(
+                "select count(e) from PeerEvaluation e where e.evaluatee.id = 4", Long.class).getSingleResult())
+                .isEqualTo(evaluationsBefore);
     }
 
     @Test
@@ -333,10 +351,18 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
-    void testDeactivationRouteRejectsStudentSelfAndOutOfScopeCourseAdmin() throws Exception {
+    void testDeactivationRouteRejectsUnauthorizedCallers() throws Exception {
         String path = this.baseUrl + "/students/4/deactivation";
 
         this.mockMvc.perform(patch(path).header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(StatusCode.FORBIDDEN));
+
+        Section section = this.sectionRepository.findById(2).orElseThrow();
+        section.getInstructors().removeIf(instructor -> instructor.getEmail().equals("b.gates@abc.edu"));
+        this.sectionRepository.saveAndFlush(section);
+
+        this.mockMvc.perform(patch(path).header(HttpHeaders.AUTHORIZATION, this.instructorBillToken))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value(StatusCode.FORBIDDEN));
 

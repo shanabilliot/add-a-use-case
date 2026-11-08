@@ -76,6 +76,8 @@ class SubmissionStatusServiceIntegrationTest extends AbstractIntegrationTest {
         // Then: John and Eric still evaluated every active teammate, and Jerry owes nothing
         assertThat(names(this.submissionStatusService.findOwing(SECTION_ID, SubmittableItem.PEER_EVALUATION, WEEK)))
                 .doesNotContain("John Smith", "Eric Hudson", "Jerry Moon");
+        assertThat(names(this.submissionStatusService.findOwing(SECTION_ID, SubmittableItem.WEEKLY_ACTIVITY_REPORT, WEEK)))
+                .doesNotContain("Jerry Moon");
     }
 
     private static List<String> names(List<Student> students) {
