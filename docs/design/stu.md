@@ -19,6 +19,7 @@ classDiagram
     class StudentService <<extend>>
     class StudentRepository <<extend>>
     class StudentLifecycleAuthorizationManager <<new>>
+    class StudentViewAuthorizationManager <<new>>
     class StudentSecurityService <<extend>>
     class AccountStatusJwtAuthenticationConverter <<new>>
     class UserRepository <<reuse>>
@@ -30,6 +31,7 @@ classDiagram
     StudentApi --> StudentController
     StudentController --> StudentService
     StudentLifecycleAuthorizationManager --> StudentSecurityService
+    StudentViewAuthorizationManager --> StudentSecurityService
     StudentSecurityService --> StudentRepository
     StudentService --> StudentRepository
     AccountStatusJwtAuthenticationConverter --> UserRepository
@@ -47,6 +49,7 @@ classDiagram
 | Reuse, extend | Scoped student lookup | [`StudentRepository.java`](../../backend/src/main/java/team/projectpulse/student/StudentRepository.java) |
 | Reuse, extend | Student lifecycle security checks | [`StudentSecurityService.java`](../../backend/src/main/java/team/projectpulse/student/StudentSecurityService.java) |
 | New | Course-admin-or-assigned-instructor lifecycle route guard | `backend/src/main/java/team/projectpulse/security/authorizationmanagers/StudentLifecycleAuthorizationManager.java` |
+| New | Student-detail route guard for the student, assigned instructor, or owning course admin | `backend/src/main/java/team/projectpulse/security/authorizationmanagers/StudentViewAuthorizationManager.java` |
 | Reuse, extend | JWT converter configuration | [`SecurityConfiguration.java`](../../backend/src/main/java/team/projectpulse/security/SecurityConfiguration.java) |
 | New | Current-account-enabled JWT authentication converter | `backend/src/main/java/team/projectpulse/security/AccountStatusJwtAuthenticationConverter.java` |
 | Reuse | Current account lookup | [`UserRepository.java`](../../backend/src/main/java/team/projectpulse/user/UserRepository.java) |
@@ -54,7 +57,7 @@ classDiagram
 | Reuse, extend | Peer-evaluation submission and section report | [`EvaluationService.java`](../../backend/src/main/java/team/projectpulse/evaluation/EvaluationService.java) |
 | Reuse | Reminder and owed-submission eligibility | [`SubmissionStatusService.java`](../../backend/src/main/java/team/projectpulse/notification/SubmissionStatusService.java) |
 
-`StudentController`, `StudentService`, and `StudentRepository` are extended for the dedicated endpoint, status-preserving generic update, and scoped lookup. The lifecycle manager is new because the existing [`StudentInstructorAuthorizationManager`](../../backend/src/main/java/team/projectpulse/security/authorizationmanagers/StudentInstructorAuthorizationManager.java) admits assigned instructors only; the lifecycle route must also admit the course admin who owns the course. The account-status-aware converter is new and replaces the claim-only converter configured in `SecurityConfiguration`. `EvaluationService` receives the disabled-evaluatee guard and historical report adjustment; `SubmissionStatusService` remains unchanged because it already excludes disabled students from obligations and reminders.
+`StudentController`, `StudentService`, and `StudentRepository` are extended for the dedicated endpoint, status-preserving generic update, and scoped lookup. The lifecycle manager is new because the existing [`StudentInstructorAuthorizationManager`](../../backend/src/main/java/team/projectpulse/security/authorizationmanagers/StudentInstructorAuthorizationManager.java) admits assigned instructors only; the lifecycle route must also admit the course admin who owns the course. The existing student-detail route also needs a dedicated guard: the use case requires the owning course admin to review student details before deactivation, while the existing route admitted only the student or an assigned instructor. The account-status-aware converter is new and replaces the claim-only converter configured in `SecurityConfiguration`. `EvaluationService` receives the disabled-evaluatee guard and historical report adjustment; `SubmissionStatusService` remains unchanged because it already excludes disabled students from obligations and reminders.
 
 ## Sequence
 
@@ -65,11 +68,26 @@ sequenceDiagram
     actor Operator as Course admin / assigned instructor
     participant UI as Student views
     participant Security as Security filter
+    participant ViewGuard as Student-detail authorization
     participant Guard as Lifecycle authorization
     participant Controller as StudentController
     participant Service as StudentService
     participant Repo as StudentRepository
-    Operator->>UI: Choose student and request deactivation [1-3]
+    Operator->>UI: Open student details [1-3]
+    UI->>Security: GET /api/v1/students/{studentId}
+    Security->>ViewGuard: Check student-detail access
+    alt Caller not authorized
+        ViewGuard-->>UI: 403; no student details
+    else Student, assigned instructor, or owning course admin
+        Security->>Controller: Continue authenticated request
+        Controller->>Service: findStudentById(studentId)
+        Service->>Repo: Load student in caller's scope
+        Repo-->>Service: Student
+        Service-->>Controller: StudentDto
+        Controller-->>UI: 200 Result<StudentDto>
+        UI-->>Operator: Show student details
+    end
+    Operator->>UI: Request deactivation
     UI-->>Operator: Explain consequences and request confirmation [4]
     alt Cancel [4a]
         Operator->>UI: Cancel
@@ -144,6 +162,7 @@ sequenceDiagram
 
 | Endpoint | Caller (who may) | Request | Success | Errors, by extension |
 |---|---|---|---|---|
+| `GET /api/v1/students/{studentId}` (existing, broadened) | Student themself, an instructor assigned to the student's course section, or the course admin who owns the course | Existing path field | Existing `Result<StudentDto>` student detail | `403` authenticated caller lacks scope or target does not resolve |
 | `PATCH /api/v1/students/{studentId}/deactivation` (new) | Course admin who owns the course, or instructor assigned to the student's course section | No body | `200 Result<StudentDto>` with `enabled=false`; an authorized repeat is also successful | `401` unauthenticated or current account disabled; `403` authenticated caller lacks scope or target does not resolve |
 | `PUT /api/v1/students/{studentId}` (existing, constrained) | Existing profile-update callers | Existing `StudentDto`; `enabled` must equal the persisted value | Existing `Result<StudentDto>` profile update | `400` if the request attempts to change `enabled`; no state change |
 | `POST /api/v1/evaluations` (existing, guarded) | Active student on a team | Existing peer-evaluation request | Existing successful evaluation response | `400` if the evaluatee is deactivated; no evaluation is stored |
@@ -156,6 +175,7 @@ sequenceDiagram
 - **Keep team assignment on deactivation.** Removing the student from the team was rejected because it would alter current membership as a side effect and discard the existing work context; report/reminder eligibility is controlled by account status.
 - **Use a dedicated deactivation endpoint and make generic updates status-preserving.** Allowing `PUT /students/{studentId}` to change `enabled` was rejected because it bypasses lifecycle authorization and confirmation. A changed enabled value receives `400`; profile edits remain available when the status is unchanged.
 - **Use a lifecycle-specific authorization manager.** Reusing `StudentInstructorAuthorizationManager` alone was rejected because it checks assigned instructors but not the course admin who owns the course; the new guard delegates the combined lifecycle permission to `StudentSecurityService`.
+- **Allow the owning course admin to review student details.** The use case requires the course admin to view the student before deactivation, but the existing detail route admitted only the student or an assigned instructor. A dedicated view guard and caller-scoped lookup add the required access without broadening it to unrelated admins.
 - **Recheck current account status for every bearer-authenticated request.** Waiting for JWT expiry, caching account status, or adding a token blocklist was rejected for this lifecycle behavior: each would fail to deny a previously issued token immediately. The database lookup checks only the current enabled state; the JWT's signed role authorities remain the authorization source. The chosen check costs a user-row database lookup per bearer-authenticated request.
 - **Authorize before returning the idempotent result.** Returning `409` for an already-disabled student was rejected because retries should be safe; skipping authorization on repeats was rejected because it would leak state to unauthorized callers.
 - **Retain reports by their assigned week and reject only new evaluations of a disabled evaluatee.** Filtering history by enabled status or removing team membership was rejected because it would hide or alter retained records. The no-evaluation case is represented by omitting the disabled student's empty summary, not by inventing a zero average.
@@ -173,6 +193,7 @@ The shared authentication and authorization behavior extends `security/` and `us
 
 | Use case, flow | Level (unit / integration) | Asserts |
 |---|---|---|
+| UC-STU-deactivate-student student-detail access | Integration | The student and assigned instructor retain access; the owning course admin can view details even when not assigned to the course section; an out-of-scope course admin receives `403`. |
 | UC-STU-deactivate-student main success | Cypress + integration | Assigned instructor and owning course admin can deactivate; the warning covers all four consequence groups above; account is disabled, team assignment and existing work remain, and success is returned. |
 | Extension 4a cancellation | Cypress + integration | Cancel sends no lifecycle request and leaves account, team assignment, and records unchanged. |
 | Extension 5a repeated deactivation | Unit + integration | Authorized repeat succeeds without an additional save or state change. |

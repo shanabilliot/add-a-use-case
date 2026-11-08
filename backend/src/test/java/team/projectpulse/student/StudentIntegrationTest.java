@@ -17,6 +17,8 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
+import team.projectpulse.section.Section;
+import team.projectpulse.section.SectionRepository;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -26,6 +28,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultHandlers.print;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @DisplayName("Integration tests for Student API endpoints")
 class StudentIntegrationTest extends AbstractIntegrationTest {
@@ -35,6 +38,12 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
 
     @Autowired
     JsonMapper jsonMapper;
+
+    @Autowired
+    StudentRepository studentRepository;
+
+    @Autowired
+    SectionRepository sectionRepository;
 
     String adminToken;
 
@@ -123,6 +132,19 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.code").value(StatusCode.FORBIDDEN))
                 .andExpect(jsonPath("$.message").value("No permission."))
                 .andExpect(jsonPath("$.data").value("Access Denied"));
+    }
+
+    @Test
+    void testCourseAdminCanViewStudentEvenWhenNotAssignedToSection() throws Exception {
+        Section section = this.sectionRepository.findById(2).orElseThrow();
+        section.getInstructors().removeIf(instructor -> instructor.getEmail().equals("b.wei@abc.edu"));
+        this.sectionRepository.saveAndFlush(section);
+
+        this.mockMvc.perform(get(this.baseUrl + "/students/4")
+                        .accept(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, this.adminToken))
+                .andExpect(jsonPath("$.flag").value(true))
+                .andExpect(jsonPath("$.data.id").value(4));
     }
 
     @Test
@@ -277,6 +299,54 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
                         .accept(MediaType.APPLICATION_JSON)
                         .header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
                 .andExpect(jsonPath("$.data.enabled").value(true));
+    }
+
+    @Test
+    void testDeactivationRouteRejectsStudentSelfAndOutOfScopeCourseAdmin() throws Exception {
+        String path = this.baseUrl + "/students/4/deactivation";
+
+        this.mockMvc.perform(patch(path).header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(StatusCode.FORBIDDEN));
+
+        this.mockMvc.perform(patch(path).header(HttpHeaders.AUTHORIZATION, this.adminTimToken))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(StatusCode.FORBIDDEN));
+
+        this.mockMvc.perform(patch(this.baseUrl + "/students/999999/deactivation")
+                        .header(HttpHeaders.AUTHORIZATION, this.adminToken))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(StatusCode.FORBIDDEN));
+    }
+
+    @Test
+    void testDeactivationRouteRejectsAnonymousCaller() throws Exception {
+        this.mockMvc.perform(patch(this.baseUrl + "/students/4/deactivation"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(StatusCode.UNAUTHORIZED));
+    }
+
+    @Test
+    void testPreviouslyIssuedTokenIsRejectedAfterAccountIsDisabled() throws Exception {
+        Student student = this.studentRepository.findById(4).orElseThrow();
+        student.setEnabled(false);
+        this.studentRepository.saveAndFlush(student);
+
+        this.mockMvc.perform(get(this.baseUrl + "/students/4")
+                        .header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(StatusCode.UNAUTHORIZED));
+    }
+
+    @Test
+    void testDisabledStudentCannotLogIn() throws Exception {
+        Student student = this.studentRepository.findById(4).orElseThrow();
+        student.setEnabled(false);
+        this.studentRepository.saveAndFlush(student);
+
+        this.mockMvc.perform(post(this.baseUrl + "/users/login")
+                        .with(httpBasic("j.smith@abc.edu", "123456")))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
