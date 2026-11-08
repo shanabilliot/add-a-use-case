@@ -52,7 +52,7 @@ describe('Student deactivation', () => {
     cy.intercept('GET', '**/students/4', { body: studentResponse(student) }).as('studentDetails')
   })
 
-  it('explains consequences and sends no request when canceled (extension 4a)', () => {
+  it('explains consequences and sends no deactivation request when canceled (extension 4a)', () => {
     cy.intercept('POST', '**/students/search*', { body: searchResponse(student) }).as(
       'studentSearch'
     )
@@ -98,5 +98,66 @@ describe('Student deactivation', () => {
     cy.wait('@studentSearch')
     cy.get('[data-cy=student-disabled]').should('be.visible')
     cy.get('[data-cy=student-deactivate]').should('not.exist')
+  })
+
+  it('reports deactivation success when refreshing the student list fails', () => {
+    let searchRequests = 0
+    cy.intercept('POST', '**/students/search*', (request) => {
+      searchRequests += 1
+      if (searchRequests === 1) {
+        request.reply({ body: searchResponse(student) })
+      } else {
+        request.reply({
+          statusCode: 500,
+          body: { flag: false, code: 500, message: 'Unable to refresh students' }
+        })
+      }
+    }).as('studentSearch')
+    cy.intercept('PATCH', '**/students/4/deactivation', {
+      body: studentResponse({ ...student, enabled: false })
+    }).as('deactivation')
+    cy.visit('/students')
+    cy.wait('@studentSearch')
+
+    cy.get('[data-cy=student-deactivate]').click()
+    cy.wait('@studentDetails')
+    cy.get('.el-message-box').contains('button', 'Deactivate').click()
+
+    cy.wait('@deactivation')
+    cy.wait('@studentSearch').its('response.statusCode').should('eq', 500)
+    cy.get('.el-message--warning').should(
+      'contain.text',
+      'John Smith was deactivated, but the student list could not be refreshed.'
+    )
+    cy.get('[data-cy=student-disabled]').should('be.visible')
+    cy.get('[data-cy=student-deactivate]').should('not.exist')
+    cy.get('.el-loading-mask').should('not.exist')
+  })
+
+  it('sends only one deactivation request after rapid activation', () => {
+    let enabled = true
+    cy.intercept('POST', '**/students/search*', (request) => {
+      request.reply({ body: searchResponse({ ...student, enabled }) })
+    }).as('studentSearch')
+    cy.intercept('PATCH', '**/students/4/deactivation', (request) => {
+      enabled = false
+      request.reply({ body: studentResponse({ ...student, enabled: false }) })
+    }).as('deactivation')
+    cy.visit('/students')
+    cy.wait('@studentSearch')
+
+    cy.get('[data-cy=student-deactivate]').then(($button) => {
+      const click = () => $button[0].dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      click()
+      click()
+    })
+    cy.wait('@studentDetails')
+    cy.get('.el-message-box').contains('button', 'Deactivate').click()
+
+    cy.wait('@deactivation').its('request.method').should('eq', 'PATCH')
+    cy.wait('@studentSearch')
+    cy.get('@studentDetails.all').should('have.length', 1)
+    cy.get('@deactivation.all').should('have.length', 1)
+    cy.get('[data-cy=student-disabled]').should('be.visible')
   })
 })

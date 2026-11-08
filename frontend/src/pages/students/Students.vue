@@ -130,18 +130,21 @@ onMounted(() => {
 
 async function loadStudents() {
   loading.value = true
-  // On the back end, the page number starts from 0, so subtract 1 here
-  const result: SearchStudentByCriteriaResponse = await searchStudents(
-    { page: pageNumber.value - 1, size: pageSize.value },
-    searchCriteria.value
-  )
-  students.value = result.data.content
+  try {
+    // On the back end, the page number starts from 0, so subtract 1 here
+    const result: SearchStudentByCriteriaResponse = await searchStudents(
+      { page: pageNumber.value - 1, size: pageSize.value },
+      searchCriteria.value
+    )
+    students.value = result.data.content
 
-  // Update pagination information
-  pageNumber.value = result.data.number + 1 // The page number starts from 0 on the back end, so add 1 here
-  pageSize.value = result.data.size
-  totalElements.value = result.data.totalElements
-  loading.value = false
+    // Update pagination information
+    pageNumber.value = result.data.number + 1 // The page number starts from 0 on the back end, so add 1 here
+    pageSize.value = result.data.size
+    totalElements.value = result.data.totalElements
+  } finally {
+    loading.value = false
+  }
 }
 
 function resetSearchCriteria() {
@@ -181,6 +184,10 @@ function closeDialog() {
 }
 
 async function requestStudentDeactivation(student: Student) {
+  if (deactivatingStudentId.value !== undefined) {
+    return
+  }
+
   const studentId = student.id
   if (studentId === undefined) {
     ElMessage.error('Cannot deactivate a student without an ID.')
@@ -208,9 +215,21 @@ async function requestStudentDeactivation(student: Student) {
       throw action
     }
 
-    await deactivateStudentApi(studentId)
+    const deactivatedStudent = await deactivateStudentApi(studentId)
+    students.value = students.value.map((currentStudent) =>
+      currentStudent.id === studentId ? deactivatedStudent.data : currentStudent
+    )
+    try {
+      await loadStudents()
+    } catch (error) {
+      console.error('Student deactivated, but refreshing the student list failed.', error)
+      ElMessage.warning(
+        `${studentName} was deactivated, but the student list could not be refreshed.`
+      )
+      return
+    }
+
     ElMessage.success(`${studentName} was deactivated successfully`)
-    await loadStudents()
   } finally {
     deactivatingStudentId.value = undefined
   }
