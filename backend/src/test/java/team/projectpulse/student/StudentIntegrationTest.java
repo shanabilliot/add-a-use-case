@@ -353,6 +353,9 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
     @Test
     void testDeactivationRouteRejectsUnauthorizedCallers() throws Exception {
         String path = this.baseUrl + "/students/4/deactivation";
+        Student targetBefore = this.studentRepository.findById(4).orElseThrow();
+        Integer originalTeamId = targetBefore.getTeam().getTeamId();
+        assertThat(targetBefore.isEnabled()).isTrue();
 
         this.mockMvc.perform(patch(path).header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
                 .andExpect(status().isForbidden())
@@ -374,6 +377,12 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
                         .header(HttpHeaders.AUTHORIZATION, this.adminToken))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value(StatusCode.FORBIDDEN));
+
+        this.entityManager.flush();
+        this.entityManager.clear();
+        Student targetAfter = this.studentRepository.findById(4).orElseThrow();
+        assertThat(targetAfter.isEnabled()).isTrue();
+        assertThat(targetAfter.getTeam().getTeamId()).isEqualTo(originalTeamId);
     }
 
     @Test
