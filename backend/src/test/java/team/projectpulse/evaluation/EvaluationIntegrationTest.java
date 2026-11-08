@@ -460,6 +460,47 @@ public class EvaluationIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void testSectionReportRetainsZeroScoreEvaluationForDeactivatedStudent() throws Exception {
+        Student student = this.entityManager.find(Student.class, 4);
+        student.setEnabled(false);
+        List<PeerEvaluation> evaluations = this.entityManager.createQuery(
+                        "select distinct e from PeerEvaluation e left join fetch e.ratings where e.evaluatee = :student and e.week = :week",
+                        PeerEvaluation.class)
+                .setParameter("student", student)
+                .setParameter("week", "2023-W31")
+                .getResultList();
+        assertThat(evaluations).isNotEmpty();
+        evaluations.forEach(evaluation -> {
+            evaluation.getRatings().forEach(rating -> rating.setActualScore(0.0));
+            evaluation.calculateTotalScore();
+        });
+        this.entityManager.flush();
+        this.entityManager.clear();
+
+        MvcResult result = this.mockMvc.perform(get(this.baseUrl + "/evaluations/sections/2/week/2023-W31")
+                        .accept(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, this.adminBingyangToken))
+                .andReturn();
+        assertThat(result.getResponse().getStatus()).isEqualTo(200);
+
+        boolean reported = false;
+        for (var average : this.jsonMapper.readTree(result.getResponse().getContentAsString())
+                .path("data").path("peerEvaluationAverages")) {
+            if (average.path("studentId").asInt() == 4) {
+                reported = true;
+                var averageScore = average.path("averageTotalScore");
+                assertThat(average.has("averageTotalScore")).isTrue();
+                assertThat(averageScore.isNumber()).isTrue();
+                assertThat(averageScore.asDouble()).isZero();
+                assertThat(average.path("publicComments").size()).isEqualTo(evaluations.size());
+                assertThat(average.path("ratingAverages").size()).isPositive();
+                break;
+            }
+        }
+        assertThat(reported).isTrue();
+    }
+
+    @Test
     void testSectionReportOmitsDeactivatedStudentWithoutEvaluations() throws Exception {
         Student jerry = this.entityManager.createQuery(
                         "select s from Student s where s.email = 'j.moon@abc.edu'", Student.class)
@@ -487,6 +528,48 @@ public class EvaluationIntegrationTest extends AbstractIntegrationTest {
             }
         }
         assertThat(reported).isFalse();
+    }
+
+    @Test
+    void testSectionReportIncludesActiveStudentWithoutEvaluations() throws Exception {
+        String week = "2023-W31";
+        Student jerry = this.entityManager.createQuery(
+                        "select s from Student s where s.email = 'j.moon@abc.edu'", Student.class)
+                .getSingleResult();
+        assertThat(jerry.isEnabled()).isTrue();
+        assertThat(jerry.getTeam()).isNotNull();
+        this.entityManager.createQuery("delete from Rating r where r.peerEvaluation.evaluatee = :student and r.peerEvaluation.week = :week")
+                .setParameter("student", jerry)
+                .setParameter("week", week)
+                .executeUpdate();
+        this.entityManager.createQuery("delete from PeerEvaluation e where e.evaluatee = :student and e.week = :week")
+                .setParameter("student", jerry)
+                .setParameter("week", week)
+                .executeUpdate();
+        this.entityManager.flush();
+        this.entityManager.clear();
+
+        MvcResult result = this.mockMvc.perform(get(this.baseUrl + "/evaluations/sections/2/week/" + week)
+                        .accept(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, this.adminBingyangToken))
+                .andReturn();
+        assertThat(result.getResponse().getStatus()).isEqualTo(200);
+
+        boolean reported = false;
+        for (var average : this.jsonMapper.readTree(result.getResponse().getContentAsString())
+                .path("data").path("peerEvaluationAverages")) {
+            if (average.path("studentId").asInt() == jerry.getId()) {
+                reported = true;
+                var averageScore = average.path("averageTotalScore");
+                assertThat(average.has("averageTotalScore")).isTrue();
+                assertThat(averageScore.isNumber()).isTrue();
+                assertThat(averageScore.asDouble()).isZero();
+                assertThat(average.path("publicComments").size()).isZero();
+                assertThat(average.path("ratingAverages").size()).isZero();
+                break;
+            }
+        }
+        assertThat(reported).isTrue();
     }
 
     @Test
