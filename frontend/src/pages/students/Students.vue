@@ -35,11 +35,11 @@
       <el-table-column label="Team" prop="teamName"></el-table-column>
       <el-table-column label="Status" prop="enabled">
         <template #default="{ row }">
-          <el-tag type="success" v-if="row.enabled">Enabled</el-tag>
-          <el-tag type="danger" v-else>Disabled</el-tag>
+          <el-tag v-if="row.enabled" data-cy="student-enabled" type="success">Enabled</el-tag>
+          <el-tag v-else data-cy="student-disabled" type="danger">Disabled</el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="Operations" width="120">
+      <el-table-column label="Operations" width="200">
         <template #default="{ row }">
           <el-button
             icon="Edit"
@@ -48,6 +48,17 @@
             type="primary"
             @click.stop="showEditStudentDialog(row)"
           ></el-button>
+          <el-button
+            v-if="row.enabled"
+            data-cy="student-deactivate"
+            type="danger"
+            plain
+            :loading="deactivatingStudentId === row.id"
+            :disabled="deactivatingStudentId !== undefined"
+            @click.stop="requestStudentDeactivation(row)"
+          >
+            Deactivate
+          </el-button>
         </template>
       </el-table-column>
       <template #empty>
@@ -78,7 +89,11 @@
 
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
-import { searchStudents } from '@/apis/student'
+import {
+  deactivateStudent as deactivateStudentApi,
+  findStudentById,
+  searchStudents
+} from '@/apis/student'
 import type {
   SearchStudentByCriteriaResponse,
   Student,
@@ -86,7 +101,7 @@ import type {
 } from '@/apis/student/types'
 import { useSettingsStore } from '@/stores/settings'
 import EditStudentForm from './EditStudentForm.vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const searchCriteria = ref<StudentSearchCriteria>({
   sectionId: NaN,
@@ -153,6 +168,7 @@ function handlePageSizeChange(newSize: number) {
 const dialogVisible = ref(false)
 
 const studentBeingEditedId = ref<number>() // ID of the artifact being edited, it will be passed to the EditArtifactForm component as a prop
+const deactivatingStudentId = ref<number>()
 
 function showEditStudentDialog(student: Student) {
   dialogVisible.value = true
@@ -162,6 +178,42 @@ function showEditStudentDialog(student: Student) {
 function closeDialog() {
   dialogVisible.value = false
   loadStudents()
+}
+
+async function requestStudentDeactivation(student: Student) {
+  const studentId = student.id
+  if (studentId === undefined) {
+    ElMessage.error('Cannot deactivate a student without an ID.')
+    return
+  }
+
+  deactivatingStudentId.value = studentId
+  try {
+    const details = await findStudentById(studentId)
+    const studentName = `${details.data.firstName} ${details.data.lastName}`
+    try {
+      await ElMessageBox.confirm(
+        `Deactivating ${studentName} will prevent them from authenticating, accessing protected resources, or submitting weekly activity reports or peer evaluations. Their account, current team assignment, and previously submitted work will be retained. This is not deletion, and the account may be reactivated in the future.`,
+        'Confirm student deactivation',
+        {
+          confirmButtonText: 'Deactivate',
+          cancelButtonText: 'Cancel',
+          type: 'warning'
+        }
+      )
+    } catch (action) {
+      if (action === 'cancel' || action === 'close') {
+        return
+      }
+      throw action
+    }
+
+    await deactivateStudentApi(studentId)
+    ElMessage.success(`${studentName} was deactivated successfully`)
+    await loadStudents()
+  } finally {
+    deactivatingStudentId.value = undefined
+  }
 }
 
 import { useRouter } from 'vue-router'
