@@ -170,6 +170,22 @@ class ReminderIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void testDeactivatedStudentIsNotEmailedForWeeklyActivityReport() throws Exception {
+        Student jerry = this.entityManager.createQuery(
+                        "select s from Student s where s.email = 'j.moon@abc.edu'", Student.class)
+                .getSingleResult();
+        jerry.setEnabled(false);
+        this.entityManager.flush();
+
+        sendReminders(this.instructorBillToken, "WEEKLY_ACTIVITY_REPORT")
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.sent").value(8));
+
+        verify(this.emailService, never()).sendReminderEmail(
+                org.mockito.ArgumentMatchers.eq("j.moon@abc.edu"), anyString(), anyString());
+    }
+
+    @Test
     void testWhenEveryListedStudentSubmitsBeforeConfirmingNoReminderIsSent() throws Exception {
         // Given: everyone listed reports before the instructor confirms
         submissionStatus("WEEKLY_ACTIVITY_REPORT").andExpect(jsonPath("$.data.teams", hasSize(3)));

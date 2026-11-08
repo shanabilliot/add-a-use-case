@@ -1,5 +1,6 @@
 package team.projectpulse.student;
 
+import jakarta.persistence.EntityManager;
 import tools.jackson.databind.json.JsonMapper;
 import team.projectpulse.AbstractIntegrationTest;
 import team.projectpulse.system.StatusCode;
@@ -17,6 +18,9 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
+import team.projectpulse.instructor.Instructor;
+import team.projectpulse.section.Section;
+import team.projectpulse.section.SectionRepository;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -24,8 +28,10 @@ import java.util.Map;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.httpBasic;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.result.MockMvcResultHandlers.print;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @DisplayName("Integration tests for Student API endpoints")
 class StudentIntegrationTest extends AbstractIntegrationTest {
@@ -35,6 +41,15 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
 
     @Autowired
     JsonMapper jsonMapper;
+
+    @Autowired
+    StudentRepository studentRepository;
+
+    @Autowired
+    SectionRepository sectionRepository;
+
+    @Autowired
+    EntityManager entityManager;
 
     String adminToken;
 
@@ -123,6 +138,97 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.code").value(StatusCode.FORBIDDEN))
                 .andExpect(jsonPath("$.message").value("No permission."))
                 .andExpect(jsonPath("$.data").value("Access Denied"));
+    }
+
+    @Test
+    void testCourseAdminCanViewStudentEvenWhenNotAssignedToSection() throws Exception {
+        Section section = this.sectionRepository.findById(2).orElseThrow();
+        section.getInstructors().removeIf(instructor -> instructor.getEmail().equals("b.wei@abc.edu"));
+        this.sectionRepository.saveAndFlush(section);
+
+        this.mockMvc.perform(get(this.baseUrl + "/students/4")
+                        .accept(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, this.adminToken))
+                .andExpect(jsonPath("$.flag").value(true))
+                .andExpect(jsonPath("$.data.id").value(4));
+    }
+
+    @Test
+    void testOwningCourseAdminDeactivatesStudentIdempotently() throws Exception {
+        Section section = this.sectionRepository.findById(2).orElseThrow();
+        section.getInstructors().removeIf(instructor -> instructor.getEmail().equals("b.wei@abc.edu"));
+        this.sectionRepository.saveAndFlush(section);
+        long activitiesBefore = this.entityManager.createQuery(
+                "select count(a) from Activity a where a.student.id = 4", Long.class).getSingleResult();
+        long evaluationsBefore = this.entityManager.createQuery(
+                "select count(e) from PeerEvaluation e where e.evaluatee.id = 4", Long.class).getSingleResult();
+
+        for (int attempt = 0; attempt < 2; attempt++) {
+            this.mockMvc.perform(patch(this.baseUrl + "/students/4/deactivation")
+                            .accept(MediaType.APPLICATION_JSON)
+                            .header(HttpHeaders.AUTHORIZATION, this.adminToken))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.flag").value(true))
+                    .andExpect(jsonPath("$.code").value(StatusCode.SUCCESS))
+                    .andExpect(jsonPath("$.message").value("Deactivate student successfully"))
+                    .andExpect(jsonPath("$.data.id").value(4))
+                    .andExpect(jsonPath("$.data.enabled").value(false))
+                    .andExpect(jsonPath("$.data.teamId").value(1));
+        }
+
+        assertThat(activitiesBefore).isPositive();
+        assertThat(evaluationsBefore).isPositive();
+        assertThat(this.entityManager.createQuery(
+                "select count(a) from Activity a where a.student.id = 4", Long.class).getSingleResult())
+                .isEqualTo(activitiesBefore);
+        assertThat(this.entityManager.createQuery(
+                "select count(e) from PeerEvaluation e where e.evaluatee.id = 4", Long.class).getSingleResult())
+                .isEqualTo(evaluationsBefore);
+    }
+
+    @Test
+    void testAssignedInstructorDeactivatesStudent() throws Exception {
+        this.mockMvc.perform(patch(this.baseUrl + "/students/4/deactivation")
+                        .accept(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, this.instructorBillToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.flag").value(true))
+                .andExpect(jsonPath("$.data.enabled").value(false))
+                .andExpect(jsonPath("$.data.teamId").value(1));
+    }
+
+    @Test
+    void testDualRoleAdminInstructorDeactivatesStudentInAssignedNonOwnedCourse() throws Exception {
+        Section section = this.sectionRepository.findById(3).orElseThrow();
+        Student target = section.getStudents().get(0);
+        Integer targetId = target.getId();
+        Integer originalTeamId = target.getTeam().getTeamId();
+        Instructor adminInstructor = this.entityManager.createQuery(
+                        "select i from Instructor i where i.email = :email", Instructor.class)
+                .setParameter("email", "b.wei@abc.edu")
+                .getSingleResult();
+
+        assertThat(adminInstructor.getRoles()).contains("admin", "instructor");
+        assertThat(section.getCourse().getCourseAdmin().getId()).isNotEqualTo(adminInstructor.getId());
+        assertThat(target.isEnabled()).isTrue();
+        section.addInstructor(adminInstructor);
+        this.sectionRepository.saveAndFlush(section);
+        this.entityManager.clear();
+
+        this.mockMvc.perform(patch(this.baseUrl + "/students/" + targetId + "/deactivation")
+                        .accept(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, this.adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.flag").value(true))
+                .andExpect(jsonPath("$.data.id").value(targetId))
+                .andExpect(jsonPath("$.data.enabled").value(false))
+                .andExpect(jsonPath("$.data.teamId").value(originalTeamId));
+
+        this.entityManager.flush();
+        this.entityManager.clear();
+        Student persisted = this.studentRepository.findById(targetId).orElseThrow();
+        assertThat(persisted.isEnabled()).isFalse();
+        assertThat(persisted.getTeam().getTeamId()).isEqualTo(originalTeamId);
     }
 
     @Test
@@ -232,7 +338,7 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
         studentDto.put("firstName", "John (updated)");
         studentDto.put("lastName", "Smith");
         studentDto.put("email", "j.smith@abc.edu");
-        studentDto.put("enabled", false); // Student cannot change their enabled status.
+        studentDto.put("enabled", true); // Profile updates must preserve the account's status.
         studentDto.put("roles", "instructor"); // Student cannot change their role.
 
         String json = this.jsonMapper.writeValueAsString(studentDto);
@@ -250,6 +356,134 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.data.password").doesNotExist())
                 .andExpect(jsonPath("$.data.enabled").value(true)) // The enabled status should not be changed.
                 .andExpect(jsonPath("$.data.roles").value("student")); // The role should not be changed.
+    }
+
+    @Test
+    void testStudentCannotChangeEnabledStatusThroughProfileUpdate() throws Exception {
+        Map<String, Object> studentDto = new HashMap<>();
+        studentDto.put("username", "john");
+        studentDto.put("firstName", "John");
+        studentDto.put("lastName", "Smith");
+        studentDto.put("email", "j.smith@abc.edu");
+        studentDto.put("enabled", false);
+        studentDto.put("roles", "student");
+
+        String json = this.jsonMapper.writeValueAsString(studentDto);
+
+        this.mockMvc.perform(put(this.baseUrl + "/students/4")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json)
+                        .accept(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
+                .andExpect(jsonPath("$.flag").value(false))
+                .andExpect(jsonPath("$.code").value(StatusCode.INVALID_ARGUMENT))
+                .andExpect(jsonPath("$.message").value("Student account status can only be changed through the deactivation endpoint."));
+
+        this.mockMvc.perform(get(this.baseUrl + "/students/4")
+                        .accept(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
+                .andExpect(jsonPath("$.data.enabled").value(true));
+    }
+
+    @Test
+    void testDeactivationRouteRejectsUnauthorizedCallers() throws Exception {
+        String path = this.baseUrl + "/students/4/deactivation";
+        Student targetBefore = this.studentRepository.findById(4).orElseThrow();
+        boolean originalEnabled = targetBefore.isEnabled();
+        Integer originalTeamId = targetBefore.getTeam().getTeamId();
+        assertThat(originalEnabled).isTrue();
+
+        this.mockMvc.perform(patch(path).header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(StatusCode.FORBIDDEN));
+        assertStudentStateUnchanged(4, originalEnabled, originalTeamId);
+
+        Section section = this.sectionRepository.findById(2).orElseThrow();
+        section.getInstructors().removeIf(instructor -> instructor.getEmail().equals("b.gates@abc.edu"));
+        this.sectionRepository.saveAndFlush(section);
+
+        this.mockMvc.perform(patch(path).header(HttpHeaders.AUTHORIZATION, this.instructorBillToken))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(StatusCode.FORBIDDEN));
+        assertStudentStateUnchanged(4, originalEnabled, originalTeamId);
+
+        this.mockMvc.perform(patch(path).header(HttpHeaders.AUTHORIZATION, this.adminTimToken))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(StatusCode.FORBIDDEN));
+        assertStudentStateUnchanged(4, originalEnabled, originalTeamId);
+
+        this.mockMvc.perform(patch(this.baseUrl + "/students/999999/deactivation")
+                        .header(HttpHeaders.AUTHORIZATION, this.adminToken))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.code").value(StatusCode.FORBIDDEN));
+        assertStudentStateUnchanged(4, originalEnabled, originalTeamId);
+    }
+
+    private void assertStudentStateUnchanged(Integer studentId, boolean enabled, Integer teamId) {
+        this.entityManager.flush();
+        this.entityManager.clear();
+        Student student = this.studentRepository.findById(studentId).orElseThrow();
+        assertThat(student.isEnabled()).isEqualTo(enabled);
+        assertThat(student.getTeam().getTeamId()).isEqualTo(teamId);
+    }
+
+    @Test
+    void testDeactivationRouteRejectsAnonymousCaller() throws Exception {
+        Student targetBefore = this.studentRepository.findById(4).orElseThrow();
+        boolean originalEnabled = targetBefore.isEnabled();
+        Integer originalTeamId = targetBefore.getTeam().getTeamId();
+        assertThat(originalEnabled).isTrue();
+
+        this.mockMvc.perform(patch(this.baseUrl + "/students/4/deactivation"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(StatusCode.UNAUTHORIZED));
+
+        this.entityManager.flush();
+        this.entityManager.clear();
+        Student targetAfter = this.studentRepository.findById(4).orElseThrow();
+        assertThat(targetAfter.isEnabled()).isEqualTo(originalEnabled);
+        assertThat(targetAfter.getTeam().getTeamId()).isEqualTo(originalTeamId);
+    }
+
+    @Test
+    void testPreviouslyIssuedTokenIsRejectedAfterStudentIsDeactivated() throws Exception {
+        this.mockMvc.perform(get(this.baseUrl + "/students/4")
+                        .header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.enabled").value(true));
+
+        this.mockMvc.perform(patch(this.baseUrl + "/students/4/deactivation")
+                        .header(HttpHeaders.AUTHORIZATION, this.instructorBillToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.enabled").value(false));
+
+        this.mockMvc.perform(get(this.baseUrl + "/students/4")
+                        .header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(StatusCode.UNAUTHORIZED));
+    }
+
+    @Test
+    void testPreviouslyIssuedTokenIsRejectedAfterAccountIsDisabled() throws Exception {
+        Student student = this.studentRepository.findById(4).orElseThrow();
+        student.setEnabled(false);
+        this.studentRepository.saveAndFlush(student);
+
+        this.mockMvc.perform(get(this.baseUrl + "/students/4")
+                        .header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(StatusCode.UNAUTHORIZED));
+    }
+
+    @Test
+    void testDisabledStudentCannotLogIn() throws Exception {
+        Student student = this.studentRepository.findById(4).orElseThrow();
+        student.setEnabled(false);
+        this.studentRepository.saveAndFlush(student);
+
+        this.mockMvc.perform(post(this.baseUrl + "/users/login")
+                        .with(httpBasic("j.smith@abc.edu", "123456")))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
