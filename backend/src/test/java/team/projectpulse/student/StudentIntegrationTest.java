@@ -387,7 +387,36 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
 
     @Test
     void testDeactivationRouteRejectsAnonymousCaller() throws Exception {
+        Student targetBefore = this.studentRepository.findById(4).orElseThrow();
+        boolean originalEnabled = targetBefore.isEnabled();
+        Integer originalTeamId = targetBefore.getTeam().getTeamId();
+        assertThat(originalEnabled).isTrue();
+
         this.mockMvc.perform(patch(this.baseUrl + "/students/4/deactivation"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value(StatusCode.UNAUTHORIZED));
+
+        this.entityManager.flush();
+        this.entityManager.clear();
+        Student targetAfter = this.studentRepository.findById(4).orElseThrow();
+        assertThat(targetAfter.isEnabled()).isEqualTo(originalEnabled);
+        assertThat(targetAfter.getTeam().getTeamId()).isEqualTo(originalTeamId);
+    }
+
+    @Test
+    void testPreviouslyIssuedTokenIsRejectedAfterStudentIsDeactivated() throws Exception {
+        this.mockMvc.perform(get(this.baseUrl + "/students/4")
+                        .header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.enabled").value(true));
+
+        this.mockMvc.perform(patch(this.baseUrl + "/students/4/deactivation")
+                        .header(HttpHeaders.AUTHORIZATION, this.instructorBillToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.enabled").value(false));
+
+        this.mockMvc.perform(get(this.baseUrl + "/students/4")
+                        .header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
                 .andExpect(status().isUnauthorized())
                 .andExpect(jsonPath("$.code").value(StatusCode.UNAUTHORIZED));
     }
