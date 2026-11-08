@@ -232,7 +232,7 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
         studentDto.put("firstName", "John (updated)");
         studentDto.put("lastName", "Smith");
         studentDto.put("email", "j.smith@abc.edu");
-        studentDto.put("enabled", false); // Student cannot change their enabled status.
+        studentDto.put("enabled", true); // Profile updates must preserve the account's status.
         studentDto.put("roles", "instructor"); // Student cannot change their role.
 
         String json = this.jsonMapper.writeValueAsString(studentDto);
@@ -250,6 +250,33 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.data.password").doesNotExist())
                 .andExpect(jsonPath("$.data.enabled").value(true)) // The enabled status should not be changed.
                 .andExpect(jsonPath("$.data.roles").value("student")); // The role should not be changed.
+    }
+
+    @Test
+    void testStudentCannotChangeEnabledStatusThroughProfileUpdate() throws Exception {
+        Map<String, Object> studentDto = new HashMap<>();
+        studentDto.put("username", "john");
+        studentDto.put("firstName", "John");
+        studentDto.put("lastName", "Smith");
+        studentDto.put("email", "j.smith@abc.edu");
+        studentDto.put("enabled", false);
+        studentDto.put("roles", "student");
+
+        String json = this.jsonMapper.writeValueAsString(studentDto);
+
+        this.mockMvc.perform(put(this.baseUrl + "/students/4")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json)
+                        .accept(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
+                .andExpect(jsonPath("$.flag").value(false))
+                .andExpect(jsonPath("$.code").value(StatusCode.INVALID_ARGUMENT))
+                .andExpect(jsonPath("$.message").value("Student account status can only be changed through the deactivation endpoint."));
+
+        this.mockMvc.perform(get(this.baseUrl + "/students/4")
+                        .accept(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
+                .andExpect(jsonPath("$.data.enabled").value(true));
     }
 
     @Test

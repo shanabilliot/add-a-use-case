@@ -59,6 +59,10 @@ public class EvaluationService {
             throw new PeerEvaluationIllegalArgumentException("You must be assigned to a team before submitting a peer evaluation.");
         }
 
+        if (!newPeerEvaluation.getEvaluatee().isEnabled()) {
+            throw new PeerEvaluationIllegalArgumentException("A deactivated student cannot be evaluated.");
+        }
+
         // Make sure the evaluator and evaluatee are on the same team. Compare team ids: Team does not override
         // equals, so comparing the entities is identity comparison and only happens to hold within one session.
         Integer evaluatorTeamId = evaluatorTeam.getTeamId();
@@ -225,6 +229,9 @@ public class EvaluationService {
 
         // For each student, compute her average total score, collect all public comments and private comments, and compute rating averages for each criterion.
         students.forEach(student -> {
+            if (!student.isEnabled() && !this.evaluationRepository.existsByWeekAndEvaluateeId(week, student.getId())) {
+                return;
+            }
             PeerEvaluationAverage peerEvaluationAverage = getPeerEvaluationAverage(week, student);
             report.getPeerEvaluationAverages().add(peerEvaluationAverage);
         });

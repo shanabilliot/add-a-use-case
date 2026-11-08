@@ -9,14 +9,13 @@ import jakarta.transaction.Transactional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 @Service
 @Transactional
@@ -72,8 +71,35 @@ public class StudentService {
     }
 
     public Student findStudentById(Integer studentId) {
-        return this.studentRepository.findById(studentId)
+        Integer callerId = this.userUtils.getUserId();
+        Optional<Student> student = this.userUtils.hasRole("ROLE_student") && studentId.equals(callerId)
+                ? this.studentRepository.findById(studentId)
+                : findStudentInOperatorScope(studentId, callerId);
+        return student
                 .orElseThrow(() -> new ObjectNotFoundException("student", studentId));
+    }
+
+    public Student deactivateStudent(Integer studentId) {
+        Student student = findStudentInOperatorScope(studentId, this.userUtils.getUserId())
+                .orElseThrow(() -> new ObjectNotFoundException("student", studentId));
+        if (!student.isEnabled()) {
+            return student;
+        }
+        student.setEnabled(false);
+        return this.studentRepository.save(student);
+    }
+
+    private Optional<Student> findStudentInOperatorScope(Integer studentId, Integer callerId) {
+        if (callerId == null) {
+            return Optional.empty();
+        }
+        if (this.userUtils.hasRole("ROLE_admin")) {
+            return this.studentRepository.findByIdAndSectionCourseCourseAdminId(studentId, callerId);
+        }
+        if (this.userUtils.hasRole("ROLE_instructor")) {
+            return this.studentRepository.findByIdAndSectionInstructorsId(studentId, callerId);
+        }
+        return Optional.empty();
     }
 
     public List<Student> findStudentsByTeamId(Integer teamId) {
@@ -108,19 +134,14 @@ public class StudentService {
         Student oldStudent = this.studentRepository.findById(studentId)
                 .orElseThrow(() -> new ObjectNotFoundException("student", studentId));
 
-        // If the user is not an admin, then the user can only update her username, first rubricName, last rubricName, and email
+        if (oldStudent.isEnabled() != update.isEnabled()) {
+            throw new IllegalArgumentException("Student account status can only be changed through the deactivation endpoint.");
+        }
+
         oldStudent.setUsername(update.getUsername());
         oldStudent.setFirstName(update.getFirstName());
         oldStudent.setLastName(update.getLastName());
         oldStudent.setEmail(update.getEmail());
-
-        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-
-        // If the user is an admin, then the user can update all the fields
-        if (authentication.getAuthorities().stream().anyMatch(grantedAuthority -> grantedAuthority.getAuthority().equals("ROLE_instructor"))) {
-            oldStudent.setEnabled(update.isEnabled());
-//            oldStudent.setRoles(update.getRoles());
-        }
 
         return this.studentRepository.save(oldStudent);
     }

@@ -1,12 +1,6 @@
 package team.projectpulse.student;
 
 import org.junit.jupiter.api.AfterEach;
-import team.projectpulse.instructor.Instructor;
-import team.projectpulse.section.Section;
-import team.projectpulse.section.SectionRepository;
-import team.projectpulse.system.UserUtils;
-import team.projectpulse.user.MyUserPrincipal;
-import team.projectpulse.user.userinvitation.UserInvitationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -18,9 +12,12 @@ import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.domain.Specification;
-import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.core.context.SecurityContextHolder;
+import team.projectpulse.section.Section;
+import team.projectpulse.section.SectionRepository;
+import team.projectpulse.system.UserUtils;
+import team.projectpulse.system.exception.ObjectNotFoundException;
+import team.projectpulse.user.userinvitation.UserInvitationService;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.util.List;
@@ -28,6 +25,7 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.*;
@@ -92,7 +90,11 @@ class StudentServiceTest {
     void testFindStudentById() {
         // Given
         Student john = this.students.get(0);
-        given(this.studentRepository.findById(1)).willReturn(Optional.of(john));
+        given(this.userUtils.getUserId()).willReturn(99);
+        given(this.userUtils.hasRole("ROLE_student")).willReturn(false);
+        given(this.userUtils.hasRole("ROLE_admin")).willReturn(false);
+        given(this.userUtils.hasRole("ROLE_instructor")).willReturn(true);
+        given(this.studentRepository.findByIdAndSectionInstructorsId(1, 99)).willReturn(Optional.of(john));
 
         // When
         Student result = this.studentService.findStudentById(1);
@@ -126,17 +128,9 @@ class StudentServiceTest {
     @Test
     void testStudentUpdateOwnInfo() {
         // Given
-        Student update = new Student("john", "John (updated)", "Smith (updated)", "j.smith@abc.edu (updated)", "", false, "admin student");
+        Student update = new Student("john", "John (updated)", "Smith (updated)", "j.smith@abc.edu (updated)", "", true, "admin student");
         given(this.studentRepository.findById(1)).willReturn(Optional.of(this.students.get(0)));
         given(this.studentRepository.save(any(Student.class))).willReturn(this.students.get(0));
-
-        Instructor instructor = new Instructor();
-        instructor.setRoles("student");
-        MyUserPrincipal myUserPrincipal = new MyUserPrincipal(instructor);
-
-        SecurityContext securityContext = SecurityContextHolder.createEmptyContext();
-        securityContext.setAuthentication(new UsernamePasswordAuthenticationToken(myUserPrincipal, null, myUserPrincipal.getAuthorities()));
-        SecurityContextHolder.setContext(securityContext);
 
         // When
         Student result = this.studentService.updateStudent(1, update);
@@ -147,23 +141,15 @@ class StudentServiceTest {
         assertThat(result.getLastName()).isEqualTo(update.getLastName());
         assertThat(result.getEmail()).isEqualTo(update.getEmail());
         assertThat(result.getRoles()).isNotEqualTo(update.getRoles());
-        assertThat(result.isEnabled()).isNotEqualTo(update.isEnabled());
+        assertThat(result.isEnabled()).isTrue();
     }
 
     @Test
     void testInstructorUpdatesStudent() {
         // Given
-        Student update = new Student("john", "John (updated)", "Smith (updated)", "j.smith@abc.edu (updated)", "", false, "admin student");
+        Student update = new Student("john", "John (updated)", "Smith (updated)", "j.smith@abc.edu (updated)", "", true, "admin student");
         given(this.studentRepository.findById(1)).willReturn(Optional.of(this.students.get(0)));
         given(this.studentRepository.save(any(Student.class))).willReturn(this.students.get(0));
-
-        Instructor instructor = new Instructor();
-        instructor.setRoles("instructor");
-        MyUserPrincipal myUserPrincipal = new MyUserPrincipal(instructor);
-
-        SecurityContext securityContext = SecurityContextHolder.createEmptyContext();
-        securityContext.setAuthentication(new UsernamePasswordAuthenticationToken(myUserPrincipal, null, myUserPrincipal.getAuthorities()));
-        SecurityContextHolder.setContext(securityContext);
 
         // When
         Student result = this.studentService.updateStudent(1, update);
@@ -175,6 +161,50 @@ class StudentServiceTest {
         assertThat(result.getEmail()).isEqualTo(update.getEmail());
 //        assertThat(result.getRoles()).isEqualTo(update.getRoles());
         assertThat(result.isEnabled()).isEqualTo(update.isEnabled());
+    }
+
+    @Test
+    void testUpdateStudentCannotChangeEnabledStatus() {
+        Student existingStudent = this.students.get(0);
+        Student update = new Student("john", "John", "Smith", "j.smith@abc.edu", "", false, "student");
+        given(this.studentRepository.findById(1)).willReturn(Optional.of(existingStudent));
+
+        Throwable throwable = catchThrowable(() -> this.studentService.updateStudent(1, update));
+
+        assertThat(throwable)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Student account status can only be changed through the deactivation endpoint.");
+        assertThat(existingStudent.isEnabled()).isTrue();
+        verify(this.studentRepository, never()).save(any(Student.class));
+    }
+
+    @Test
+    void testDeactivateStudentIsScopedAndIdempotent() {
+        Student student = this.students.get(0);
+        given(this.userUtils.getUserId()).willReturn(99);
+        given(this.userUtils.hasRole("ROLE_admin")).willReturn(false);
+        given(this.userUtils.hasRole("ROLE_instructor")).willReturn(true);
+        given(this.studentRepository.findByIdAndSectionInstructorsId(1, 99)).willReturn(Optional.of(student));
+        given(this.studentRepository.save(student)).willReturn(student);
+
+        Student firstResult = this.studentService.deactivateStudent(1);
+        Student secondResult = this.studentService.deactivateStudent(1);
+
+        assertThat(firstResult.isEnabled()).isFalse();
+        assertThat(secondResult).isSameAs(student);
+        verify(this.studentRepository, times(1)).save(student);
+    }
+
+    @Test
+    void testDeactivateStudentCannotResolveOutsideCourseAdminScope() {
+        given(this.userUtils.getUserId()).willReturn(99);
+        given(this.userUtils.hasRole("ROLE_admin")).willReturn(true);
+        given(this.studentRepository.findByIdAndSectionCourseCourseAdminId(1, 99)).willReturn(Optional.empty());
+
+        Throwable throwable = catchThrowable(() -> this.studentService.deactivateStudent(1));
+
+        assertThat(throwable).isInstanceOf(ObjectNotFoundException.class);
+        verify(this.studentRepository, never()).save(any(Student.class));
     }
 
     @Test
