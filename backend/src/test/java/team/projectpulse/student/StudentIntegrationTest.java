@@ -354,12 +354,14 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
     void testDeactivationRouteRejectsUnauthorizedCallers() throws Exception {
         String path = this.baseUrl + "/students/4/deactivation";
         Student targetBefore = this.studentRepository.findById(4).orElseThrow();
+        boolean originalEnabled = targetBefore.isEnabled();
         Integer originalTeamId = targetBefore.getTeam().getTeamId();
-        assertThat(targetBefore.isEnabled()).isTrue();
+        assertThat(originalEnabled).isTrue();
 
         this.mockMvc.perform(patch(path).header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value(StatusCode.FORBIDDEN));
+        assertStudentStateUnchanged(4, originalEnabled, originalTeamId);
 
         Section section = this.sectionRepository.findById(2).orElseThrow();
         section.getInstructors().removeIf(instructor -> instructor.getEmail().equals("b.gates@abc.edu"));
@@ -368,21 +370,26 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
         this.mockMvc.perform(patch(path).header(HttpHeaders.AUTHORIZATION, this.instructorBillToken))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value(StatusCode.FORBIDDEN));
+        assertStudentStateUnchanged(4, originalEnabled, originalTeamId);
 
         this.mockMvc.perform(patch(path).header(HttpHeaders.AUTHORIZATION, this.adminTimToken))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value(StatusCode.FORBIDDEN));
+        assertStudentStateUnchanged(4, originalEnabled, originalTeamId);
 
         this.mockMvc.perform(patch(this.baseUrl + "/students/999999/deactivation")
                         .header(HttpHeaders.AUTHORIZATION, this.adminToken))
                 .andExpect(status().isForbidden())
                 .andExpect(jsonPath("$.code").value(StatusCode.FORBIDDEN));
+        assertStudentStateUnchanged(4, originalEnabled, originalTeamId);
+    }
 
+    private void assertStudentStateUnchanged(Integer studentId, boolean enabled, Integer teamId) {
         this.entityManager.flush();
         this.entityManager.clear();
-        Student targetAfter = this.studentRepository.findById(4).orElseThrow();
-        assertThat(targetAfter.isEnabled()).isTrue();
-        assertThat(targetAfter.getTeam().getTeamId()).isEqualTo(originalTeamId);
+        Student student = this.studentRepository.findById(studentId).orElseThrow();
+        assertThat(student.isEnabled()).isEqualTo(enabled);
+        assertThat(student.getTeam().getTeamId()).isEqualTo(teamId);
     }
 
     @Test
