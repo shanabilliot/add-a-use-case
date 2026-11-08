@@ -1458,7 +1458,7 @@ Details:
 
 **Preconditions:**
 - PRE-1. The course admin or instructor is logged into the system.
-- PRE-2. There exists at least one active student in the system.
+- PRE-2. The student exists in the system.
 
 **Postconditions:**
 - POST-1. The student's account is deactivated.
@@ -1473,12 +1473,23 @@ Details:
 7. Use case ends.
 
 **Extensions:**
+- **4a. The course admin or instructor cancels before confirming:**
+  - 4a1. The course admin or instructor cancels the deactivation.
+  - 4a2. The system leaves the student's account and team assignment unchanged, and the use case ends.
+- **5a. The student is already deactivated when the authorized request is processed:**
+  - 5a1. The system confirms that the student's account remains deactivated without changing its state, and the use case ends.
+- **5b. An authenticated caller is not authorized to deactivate this student:**
+  - 5b1. The system denies the request with a 403 response and makes no change to the student's account or team assignment (per BR-student-lifecycle and FR-SEC-deny-unauthorized).
+  - 5b2. The use case ends.
+- **5c. The caller is not authenticated:**
+  - 5c1. The system rejects the request with a 401 response and makes no change to the student's account or team assignment (per FR-SEC-authentication).
+  - 5c2. The use case ends.
 **Priority:** Low
 **Frequency of Use:** Rare. Occurs occasionally when a student withdraws from a course section.
 **Business Rules:** BR-student-lifecycle
 
 **Associated Information:**
-- Consequence of the deactivation: The student will no longer be able to log in or submit weekly activity reports and peer evaluations, but the student's account and her previously submitted work are kept in the system. Deactivation will NOT remove the student from the system, and the account can be reactivated in the future (UC-STU-reactivate-student: Reactivate a student). This is distinct from deletion (UC-STU-delete-student: Delete a student), which is a physical, unrecoverable delete. The course admin or instructor shall be able to cancel the use case at any time prior to submitting it.
+- Consequence of the deactivation: The student can no longer authenticate or access protected resources, or submit weekly activity reports or peer evaluations. Her account, current team assignment, and previously submitted work are retained (BR-student-lifecycle). This is distinct from deletion (UC-STU-delete-student: Delete a student), which is a physical, unrecoverable delete. The account may be reactivated in the future (UC-STU-reactivate-student: Reactivate a student).
 
 **Related Use Cases:** UC-STU-delete-student: Delete a student; UC-STU-reactivate-student: Reactivate a student
 **Assumptions:**
@@ -2343,7 +2354,7 @@ Report generating algorithm: For each individual criterion score (e.g., Quality 
 
 **Priority:** High
 **Frequency of Use:** Approximately 2 users, average of 1 usage per week.
-**Business Rules:** BR-section-scoped-access (the instructor may generate the report only for a course section she is assigned to), BR-evaluation-private-comment, BR-submission-owed (who has not turned in the peer evaluation)
+**Business Rules:** BR-section-scoped-access (the instructor may generate the report only for a course section she is assigned to), BR-evaluation-private-comment, BR-submission-owed (who has not turned in the peer evaluation), BR-student-lifecycle (preserve existing peer evaluations for their assigned week)
 
 **Associated Information:**
 
@@ -2365,6 +2376,8 @@ An example of the generated report:
 The report shall show who did not turn in the peer evaluation for that week, meaning the students who owe it (BR-submission-owed).
 
 Report generating algorithm: How to compute the peer evaluation grade for a student? Each student receives multiple peer evaluations from her teammates every week. First, obtain the peer evaluations received by a student for that week. For each peer evaluation, compute a total score by adding up the individual criterion scores. Then compute the average of the total scores across the peer evaluations. For example, John Doe receives two peer evaluations from Tim Smith and Lily Fisher, respectively. Tim Smith gives the following scores based on the rubric: 10, 9, 10, 9, 10, 10. So the total score given by Tim is 58. Lily Fisher gives the following scores based on the rubric: 5, 5, 10, 10, 10, 10. So the total score given by Tim is 50. The grade that John Doe receives that week is (58 + 50) / 2 = 54.
+
+Deactivated students: The report shall include a deactivated student when at least one peer evaluation was received for the selected week, and shall include all existing peer evaluations assigned to that week regardless of the student's current account status or when they were submitted. If no peer evaluations were received for a deactivated student in the selected week, the report shall not generate a zero-average row for her.
 
 Details of a peer evaluation: The instructor may choose to see more details of one student's peer evaluation. For example, this table below shows the scores given by each evaluator in the same team to John Doe.
 
