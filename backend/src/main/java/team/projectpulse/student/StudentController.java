@@ -47,6 +47,13 @@ public class StudentController {
         return new Result(true, StatusCode.SUCCESS, "Find student successfully", studentDto);
     }
 
+    @PatchMapping("/{studentId}/deactivation")
+    public Result deactivateStudent(@PathVariable Integer studentId) {
+        Student student = this.studentService.deactivateStudent(studentId);
+        StudentDto studentDto = this.studentToStudentDtoConverter.convert(student);
+        return new Result(true, StatusCode.SUCCESS, "Deactivate student successfully", studentDto);
+    }
+
     @GetMapping("/teams/{teamId}")
     public Result findStudentsByTeamId(@PathVariable Integer teamId) {
         List<Student> students = this.studentService.findStudentsByTeamId(teamId);

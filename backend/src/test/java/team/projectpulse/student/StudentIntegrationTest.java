@@ -148,6 +148,37 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void testOwningCourseAdminDeactivatesStudentIdempotently() throws Exception {
+        Section section = this.sectionRepository.findById(2).orElseThrow();
+        section.getInstructors().removeIf(instructor -> instructor.getEmail().equals("b.wei@abc.edu"));
+        this.sectionRepository.saveAndFlush(section);
+
+        for (int attempt = 0; attempt < 2; attempt++) {
+            this.mockMvc.perform(patch(this.baseUrl + "/students/4/deactivation")
+                            .accept(MediaType.APPLICATION_JSON)
+                            .header(HttpHeaders.AUTHORIZATION, this.adminToken))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.flag").value(true))
+                    .andExpect(jsonPath("$.code").value(StatusCode.SUCCESS))
+                    .andExpect(jsonPath("$.message").value("Deactivate student successfully"))
+                    .andExpect(jsonPath("$.data.id").value(4))
+                    .andExpect(jsonPath("$.data.enabled").value(false))
+                    .andExpect(jsonPath("$.data.teamId").value(1));
+        }
+    }
+
+    @Test
+    void testAssignedInstructorDeactivatesStudent() throws Exception {
+        this.mockMvc.perform(patch(this.baseUrl + "/students/4/deactivation")
+                        .accept(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, this.instructorBillToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.flag").value(true))
+                .andExpect(jsonPath("$.data.enabled").value(false))
+                .andExpect(jsonPath("$.data.teamId").value(1));
+    }
+
+    @Test
     void testStudentJohnFindOwnInfoById() throws Exception {
         this.mockMvc.perform(get(this.baseUrl + "/students/4").accept(MediaType.APPLICATION_JSON).header(HttpHeaders.AUTHORIZATION, this.studentJohnToken))
                 .andExpect(jsonPath("$.flag").value(true))
