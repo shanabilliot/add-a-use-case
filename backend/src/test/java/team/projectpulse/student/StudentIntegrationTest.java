@@ -18,6 +18,7 @@ import org.springframework.test.web.servlet.MvcResult;
 import org.springframework.test.web.servlet.ResultActions;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
+import team.projectpulse.instructor.Instructor;
 import team.projectpulse.section.Section;
 import team.projectpulse.section.SectionRepository;
 
@@ -194,6 +195,40 @@ class StudentIntegrationTest extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.flag").value(true))
                 .andExpect(jsonPath("$.data.enabled").value(false))
                 .andExpect(jsonPath("$.data.teamId").value(1));
+    }
+
+    @Test
+    void testDualRoleAdminInstructorDeactivatesStudentInAssignedNonOwnedCourse() throws Exception {
+        Section section = this.sectionRepository.findById(3).orElseThrow();
+        Student target = section.getStudents().get(0);
+        Integer targetId = target.getId();
+        Integer originalTeamId = target.getTeam().getTeamId();
+        Instructor adminInstructor = this.entityManager.createQuery(
+                        "select i from Instructor i where i.email = :email", Instructor.class)
+                .setParameter("email", "b.wei@abc.edu")
+                .getSingleResult();
+
+        assertThat(adminInstructor.getRoles()).contains("admin", "instructor");
+        assertThat(section.getCourse().getCourseAdmin().getId()).isNotEqualTo(adminInstructor.getId());
+        assertThat(target.isEnabled()).isTrue();
+        section.addInstructor(adminInstructor);
+        this.sectionRepository.saveAndFlush(section);
+        this.entityManager.clear();
+
+        this.mockMvc.perform(patch(this.baseUrl + "/students/" + targetId + "/deactivation")
+                        .accept(MediaType.APPLICATION_JSON)
+                        .header(HttpHeaders.AUTHORIZATION, this.adminToken))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.flag").value(true))
+                .andExpect(jsonPath("$.data.id").value(targetId))
+                .andExpect(jsonPath("$.data.enabled").value(false))
+                .andExpect(jsonPath("$.data.teamId").value(originalTeamId));
+
+        this.entityManager.flush();
+        this.entityManager.clear();
+        Student persisted = this.studentRepository.findById(targetId).orElseThrow();
+        assertThat(persisted.isEnabled()).isFalse();
+        assertThat(persisted.getTeam().getTeamId()).isEqualTo(originalTeamId);
     }
 
     @Test

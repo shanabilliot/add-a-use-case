@@ -94,7 +94,10 @@ public class StudentService {
             return Optional.empty();
         }
         if (this.userUtils.hasRole("ROLE_admin")) {
-            return this.studentRepository.findByIdAndSectionCourseCourseAdminId(studentId, callerId);
+            Optional<Student> student = this.studentRepository.findByIdAndSectionCourseCourseAdminId(studentId, callerId);
+            if (student.isPresent()) {
+                return student;
+            }
         }
         if (this.userUtils.hasRole("ROLE_instructor")) {
             return this.studentRepository.findByIdAndSectionInstructorsId(studentId, callerId);
